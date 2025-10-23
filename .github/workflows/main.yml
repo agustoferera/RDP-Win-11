@@ -1,5 +1,4 @@
-name: "Win11 RDP + Tailscale (NO ERROR FINAL)"
-
+name: "Win11 RDP + Tailscale (NAT OK)"
 on:
   workflow_dispatch:
 
@@ -7,25 +6,27 @@ jobs:
   rdp-win11:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Siapkan Docker & tools
+      - name: Install Docker & tools
         run: |
           sudo apt-get remove -y containerd containerd.io || true
           sudo apt-get update
           curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list
           sudo apt-get update
-          sudo apt-get install -y docker-ce docker-ce-cli socat qemu-system-x86 curl unzip
+          sudo apt-get install -y docker-ce docker-ce-cli curl unzip
 
-      - name: Jalankan Windows 11 container
+      - name: Jalankan Windows 11 container (NAT 3389)
         run: |
           sudo docker pull dockurr/windows:latest
           sudo docker rm -f win11 || true
-          sudo docker run -d --name win11 --privileged -e VERSION=11 -e RAM_SIZE=6G -e CPU_CORES=4 -p 127.0.0.1:3389:3389 dockurr/windows
+          sudo docker run -d --name win11 \
+            --privileged \
+            -e VERSION=11 -e RAM_SIZE=6G -e CPU_CORES=4 \
+            -p 3389:3389 dockurr/windows
           sleep 120
 
       - name: Install dan aktifkan Tailscale
@@ -41,31 +42,15 @@ jobs:
           sudo tailscale up --authkey=${TS_AUTHKEY} --hostname=rdp-win11-${{ github.run_id }} --ssh
           sudo tailscale status
 
-      - name: Matikan socat lama lalu port-forward IPv4 only
-        run: |
-          sudo pkill socat || true
-          nohup socat TCP4-LISTEN:3389,reuseaddr,fork TCP:127.0.0.1:3389 &
-          sleep 5
-
-      - name: Verifikasi port RDP benar dengan IP Tailscale
+      - name: Verifikasi port RDP Win11 via IP Tailscale
         run: |
           tailscale_ip=$(sudo tailscale ip -4 | head -n 1)
-          echo "============================================"
           echo "Win11 RDP aktif di Tailscale IP: $tailscale_ip"
-          echo "Gunakan IP ini di Remote Desktop (mstsc.exe), port 3389"
-          echo "============================================"
-          nc_out="FAIL"
           for i in {1..30}; do
-            nc -z $tailscale_ip 3389 && nc_out="OK" && break
+            nc -z $tailscale_ip 3389 && echo "PORT 3389 OK di $tailscale_ip:3389" && break
             echo "Menunggu port 3389 RDP siap... [$i/30]"
             sleep 3
           done
-          if [ "$nc_out" = "OK" ]; then
-            echo "PORT 3389 SUDAH SIAP! Silakan RDP ke $tailscale_ip:3389"
-          else
-            echo "GAGAL port 3389! Cek kembali container atau workflow!"
-            exit 1
-          fi
 
       - name: Sesi tetap hidup
         run: sleep 3600
